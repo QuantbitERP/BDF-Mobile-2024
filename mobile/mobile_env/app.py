@@ -49,7 +49,7 @@ def login(usr, pwd):
         # validate_employee(login_manager.user)
         login_manager.post_login()
         if frappe.response["message"] == "Logged In":
-            emp_data = get_employee_by_user(login_manager.user)
+            # emp_data = get_employee_by_user(login_manager.user)
             frappe.response["user"] = login_manager.user
             frappe.response["key_details"] = generate_key(login_manager.user)
             # frappe.response["employee_id"] = emp_data.get("name")
