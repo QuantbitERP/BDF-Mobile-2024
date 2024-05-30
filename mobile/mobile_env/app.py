@@ -74,7 +74,7 @@ def get_user_document():
 @frappe.whitelist()
 def user_has_permission():
     permission_list=[]
-    doclist=["sales Invoice","Sales Order","Lead","Quotation","Leave Application","Expense Claim","Attendance","Customer","Payment Entry","Report"]
+    doclist=["sales Invoice","Sales Order","Customer","Payment Entry","Report"]
     for i in doclist:
         permission=has_permission(i)
         if permission:
@@ -247,39 +247,30 @@ def change_password(**kwargs):
 @frappe.whitelist()
 def get_profile():
     try:
-        emp_data = get_employee_by_user(frappe.session.user)
-        if isinstance(emp_data, str):
-            return gen_response(400,emp_data)
+        
         employee_details = frappe.get_cached_value(
-            "Employee",
-            emp_data.get("name"),
+            "User",
+           frappe.session.user,
             [
-                "employee_name",
-                "designation",
+                "username",
+                "full_name",
+                "email",
                 "name",
-                "date_of_joining",
-                "date_of_birth",
+            "time_zone",
+                "birth_date",
                 "gender",
-                "company_email",
-                "personal_email",
-                "cell_number",
-                "emergency_phone_number",
+                "mobile_no"
             ],
             as_dict=True,
         )
-        employee_details["date_of_joining"] = employee_details[
-            "date_of_joining"
-        ].strftime("%d-%m-%Y")
-        employee_details["date_of_birth"] = employee_details["date_of_birth"].strftime(
-            "%d-%m-%Y"
-        )
+        
         image=frappe.get_cached_value(
-            "Employee", emp_data.get("name"), "image"
+            "User",frappe.session.user, "user_image",
         )
         if image is not None:
-            employee_details["employee_image"] = frappe.utils.get_url()+ image
+            employee_details["user_image"] = frappe.utils.get_url()+ image
         else:
-            employee_details["employee_image"] = None
+            employee_details["user_image"] = None
         
 
         return gen_response(200, "My Profile", employee_details)
@@ -308,20 +299,11 @@ def add_note_in_lead(doc_name, note):
 @frappe.whitelist()
 def update_profile_picture():
     try:
-        emp_data = get_employee_by_user(frappe.session.user)
-        if isinstance(emp_data, str):
-            return gen_response(400,emp_data)
+       
         from frappe.handler import upload_file
 
         employee_profile_picture = upload_file()
-        employee_profile_picture.attached_to_doctype = "Employee"
-        employee_profile_picture.attached_to_name = emp_data.get("name")
-        employee_profile_picture.attached_to_field = "image"
-        employee_profile_picture.save(ignore_permissions=True)
-
-        frappe.db.set_value(
-            "Employee", emp_data.get("name"), "image", employee_profile_picture.file_url
-        )
+       
         if employee_profile_picture:
             frappe.db.set_value(
                 "User",
@@ -329,7 +311,7 @@ def update_profile_picture():
                 "user_image",
                 employee_profile_picture.file_url,
             )
-        return gen_response(200, "Employee profile picture updated successfully")
+        return gen_response(200, "Profile picture updated successfully")
     except Exception as e:
         return exception_handel(e)
 

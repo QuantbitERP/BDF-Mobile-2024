@@ -1,7 +1,7 @@
 import json
 import frappe
 from frappe import _
-
+from erpnext.utilities.product import get_price
 from erpnext.accounts.utils import getdate
 from mobile.mobile_env.app_utils import (
     gen_response,
@@ -21,9 +21,29 @@ def get_customer_list():
     try:
         customer_list = frappe.get_list(
             "Customer",
-            fields=["name", "customer_name"],
+            fields=["name", "customer_name", "workflow_state", "default_price_list"],
+            filters={"workflow_state": "Approved"}
         )
-        gen_response(200, "Customer list get successfully", customer_list)
+        for customer in customer_list:
+            routes = frappe.get_value(
+                "Dynamic Link",
+                {
+                    "link_doctype": "Route Master",
+                    "parenttype": "Customer",
+                    "parent": customer.name,
+                },
+                'link_name'
+            )
+            customer["routes"] = routes
+            route_warehouse=frappe.get_value(
+                "Route Master",
+                routes,
+                'source_warehouse'
+            )
+            customer["route_warehouse"]=route_warehouse
+
+
+        gen_response(200, "Customer list fetched successfully", customer_list)
     except Exception as e:
         return exception_handel(e)
 
@@ -31,24 +51,64 @@ def get_customer_list():
 """get item list for mobile app to make order"""
 
 @frappe.whitelist()
-def get_item_list(warehouse):
+def get_item_list(warehouse=None, price_list=None,customer=None):
+    # Set default warehouse and price list if not provided
     if not warehouse:
-        warehouse=frappe.db.get_single_value("Stock Settings","default_warehouse")
-        frappe.msgprint(warehouse)
-    else:
-        warehouse
+        warehouse = frappe.db.get_single_value("Stock Settings", "default_warehouse")
+        
+    if not price_list:
+        price_list = frappe.db.get_single_value("Selling Settings", "selling_price_list")
+        
     try:
+        # Fetching the party specific items
+        party_item_list = frappe.get_all(
+            "Party Specific Item",
+            filters={
+                "party_type": "Customer",
+                "party": customer,
+                "restrict_based_on": "Item"
+            },
+            pluck="based_on_value"
+        )
+        
+        frappe.msgprint(str(party_item_list))
+
+        # If no party-specific items are found, get all items
+        if not party_item_list:
+            frappe.msgprint("No party-specific items found, retrieving all items.")
+            item_filters = {
+                "is_sales_item": 1,
+                "has_variants": 0,
+                "disabled": 0
+            }
+        else:
+            item_filters = {
+                "is_sales_item": 1,
+                "has_variants": 0,
+                "disabled": 0,
+                "name": ["in", party_item_list]
+            }
+
+        # Fetching item details
         item_list = frappe.get_list(
             "Item",
-            fields=["name", "item_name", "item_code", "image"],
+            fields=[
+                "name",
+                "item_name",
+                "item_code",
+                "image",
+                "sales_uom",
+                "stock_uom"
+            ],
+            filters=item_filters
         )
-        items = get_items_data(item_list,warehouse)
+        items = get_items_data(item_list,warehouse,price_list,customer)
         gen_response(200, "Item list get successfully", items)
     except Exception as e:
         exception_handel(e)
 
 
-def get_items_data(items,warehouse):
+def get_items_data(items,warehouse,price_list,customer):
     items_data = []
     for item in items:
         item_data = {
@@ -56,8 +116,9 @@ def get_items_data(items,warehouse):
             "item_name": item.item_name,
             "item_code": item.item_code,
             "image": item.image,
+            "uom":item.sales_uom if item.sales_uom else item.stock_uom,
             "actual_qty": float(get_actual_qty(item.item_code,warehouse)),
-            "rate": get_item_rate(item.item_code)  # Fetch rate
+            "rate": get_item_rate(item.item_code,price_list,customer)  # Fetch rate
         }
         items_data.append(item_data)
     return items_data
@@ -67,7 +128,7 @@ def get_actual_qty(item_code,warehouse):
     bin_data = frappe.get_all(
         "Bin",
         filters={"item_code": item_code,"warehouse":warehouse},
-        fields=["actual_qty"]
+        fields=["actual_qty", "warehouse"]
     )
     if bin_data:
         return bin_data[0].get("actual_qty", 0)
@@ -75,18 +136,17 @@ def get_actual_qty(item_code,warehouse):
         return 0
 
 
-def get_item_rate(item_code):
-    item_price = frappe.get_all(
-        "Item Price",
-        filters={"item_code": item_code},
-        fields=["price_list_rate"],
-        order_by="creation desc",  # Add this to get the latest price
-        limit=1  # Add this to get only the latest price
-    )
-    if item_price:
-        return item_price[0].get("price_list_rate", 0)
+def get_item_rate(item_code, price_list, customer):
+    customer_group = frappe.get_value("Customer", customer, "customer_group")
+    global_defaults = get_global_defaults()
+    company = global_defaults.get("default_company")
+    item_price = get_price(item_code=item_code, price_list=price_list, customer_group=customer_group, company=company)
+    if item_price and "formatted_price_sales_uom" in item_price:
+        formatted_price = item_price["formatted_price_sales_uom"].replace('₹', '').replace(',', '').strip()
+        return float(formatted_price)
     else:
         return 0.0
+
 
 # Continue with your code as needed
     
@@ -96,9 +156,7 @@ def prepare_order_totals(**kwargs):
         data = kwargs
         if not data.get("customer"):
             return gen_response(500, "Customer is required.")
-      
-        # ess_settings = get_ess_settings()
-        # default_warehouse = ess_settings.get("default_warehouse")
+
         source_warehouse=data.get('set_warehouse')
         if source_warehouse:
             for item in data.get("items"):

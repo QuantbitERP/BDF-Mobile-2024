@@ -32,6 +32,8 @@ from mobile.mobile_env.app_utils import (
     get_ess_settings,
     get_global_defaults,
     exception_handel,
+    get_actions,
+    check_workflow_exists,
 )
 
 
@@ -139,6 +141,10 @@ def get_customer(name):
                  shipping_add=a                                  
         result = {
             "name": cust.name,
+            "docstatus":cust.docstatus,
+            "disabled":cust.disabled,
+            "workflow_state":cust.workflow_state,
+            "doctype":cust.doctype,
             "customer_name": cust.customer_name,
             "customer_type": cust.customer_type,
             "customer_group": cust.customer_group,
@@ -167,6 +173,52 @@ def get_customer(name):
                 "country": shipping_add.country if shipping_add else None
             } if shipping_add else None
         }
+        comments = frappe.get_all(
+            "Comment",
+            filters={
+                "reference_name": ["like", "%{0}%".format(result.get("name"))],
+                "comment_type": "Comment",
+            },
+            fields=[
+                "content as comment",
+                "comment_by",
+                "reference_name",
+                "creation",
+                "comment_email",
+            ],
+        )
+        ordertodeliver = frappe.get_all(
+            "Sales Order",
+            filters={
+                "customer": result.get("name"),
+                "status":["in", ["To Deliver and Bill","To Deliver"]],
+            },
+            fields=[
+                "name",
+            ],order_by="creation desc"
+        )
+        orders = frappe.get_list(
+            "Sales Order",
+            filters={
+                "customer": result.get("name"),
+            },
+            fields=[
+                "name","delivery_date","rounded_total"
+            ],order_by="creation desc"
+        )
+        for comment in comments:
+            comment["commented"] = pretty_date(comment["creation"])
+            comment["creation"] = comment["creation"].strftime("%I:%M %p")
+            comment["user_image"] = frappe.get_value(
+                "User", comment.comment_email, "user_image", cache=True
+            ) 
+        result["orders"]=orders
+        result["comments"] = comments
+        result["order_deliver"]=len(ordertodeliver)
+        result["next_action"] = get_actions(result, result)
+        result["allow_edit"] = (
+            True if result.get("docstatus") == 0 else False
+        )
         gen_response(200, "Customer data get successfully.", result)
     except Exception as e:
         return exception_handel(e)
