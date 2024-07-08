@@ -52,19 +52,19 @@ def run_customer_ledger_report(from_date, to_date, customer, customer_group):
 
         from frappe.desk.query_report import run
 
-        attendance_report = run("Customer Ledger Summary", filters=filters)
-
+        attendance_report = run("Customer Ledger Summary",filters=filters,ignore_prepared_report=True)
+        frappe.msgprint(str(attendance_report))
         if attendance_report:
             for entry in attendance_report.get("result"):
                if isinstance(entry, dict): 
                 processed_entry = {
-                    "party": entry.get("party"),
-                    "party_name": entry.get("party_name"),
-                    "opening_balance": float(entry.get("opening_balance", 0)),
-                    "invoiced_amount": float(entry.get("invoiced_amount", 0)),
-                    "bank_receipts": float(entry.get("bank_receipts", 0)),
-                    "cash_receipts": float(entry.get("cash_receipts", 0)),
-                    "closing_balance": float(entry.get("closing_balance", 0)),
+                    "party": entry.get("party")if entry.get("party") else '',
+                    "party_name": entry.get("party_name")if entry.get("party") else '',
+                    "opening_balance": float(entry.get("opening_balance", 0))if entry.get("opening_balance") else 0.0,
+                    "invoiced_amount": float(entry.get("invoiced_amount", 0))if entry.get("invoiced_amount") else 0.0,
+                    "bank_receipts": float(entry.get("bank_receipts", 0))if entry.get("bank_receipts") else 0.0,
+                    "cash_receipts": float(entry.get("cash_receipts", 0))if entry.get("cash_receipts") else 0.0,
+                    "closing_balance": float(entry.get("closing_balance", 0))if entry.get("closing_balance") else 0.0,
                 }
                 processed_data.append(processed_entry)
             return gen_response(200, "Customer Ledger get successfully", processed_data)
@@ -73,37 +73,40 @@ def run_customer_ledger_report(from_date, to_date, customer, customer_group):
 
 
 @frappe.whitelist()
-def run_payment_ledger_report(from_date, to_date):
+def run_payment_ledger_report(from_date, to_date,party_type=None):
     try:
         processed_data = []
         global_defaults = get_global_defaults()
         company = global_defaults.get("default_company")
         filters = {
-            "from_date": "2024-04-01",
-            "to_date": "2024-04-15",
+            "period_start_date": from_date,
+            "period_end_date": to_date,
             "company": company,
-            
+            "party_type":party_type
+           
         }
 
         from frappe.desk.query_report import run
 
-        attendance_report = run("Payment Ledger", filters=filters)
-        # frappe.throw(str(attendance_report.get("result")))
+        attendance_report = run("Payment Ledger", filters=filters,)
+        frappe.msgprint(str(len(attendance_report)))
         if attendance_report:
             for entry in attendance_report.get("result"):
-                
-                if isinstance(entry, dict): 
+                if isinstance(entry, dict):
                     processed_entry = {
-                        "posting_date": entry.get("posting_date"),
-                        "account": entry.get("account"),
-                        "party_type": entry.get("party_type"),
-                        "party": entry.get("party"),
-                        "voucher_type": entry.get("voucher_type"),
-                        "voucher_no": entry.get("voucher_no"),
-                        "currency": entry.get("currency"),
-                        "amount":float(entry.get("amount"))
+                        "posting_date": entry.get("posting_date") if entry.get("posting_date") else '',
+                        "account": entry.get("account") if entry.get("account") else '',
+                        "party_type": entry.get("party_type") if entry.get("party_type") else '',
+                        "party": entry.get("party") if entry.get("party") else '',
+                        "voucher_type": entry.get("voucher_type") if entry.get("voucher_type") else '',
+                        "voucher_no": entry.get("voucher_no") if entry.get("voucher_no") else '',
+                        "against_voucher_type": entry.get("against_voucher_type") if entry.get("against_voucher_type") else '',
+                        "against_voucher_no": entry.get("against_voucher_no") if entry.get("against_voucher_no") else '',
+                        "currency": entry.get("currency") if entry.get("currency") else '',
+                        "amount": float(entry.get("amount")) if entry.get("amount") else 0.0,
                     }
                     processed_data.append(processed_entry)
-                return gen_response(200, "Payment Ledger get successfully", processed_data)
+            return gen_response(200, "Payment Ledger get successfully", processed_data)
     except Exception as e:
         return exception_handel(e)
+
