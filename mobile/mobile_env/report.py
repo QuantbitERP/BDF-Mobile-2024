@@ -88,7 +88,7 @@ def run_payment_ledger_report(from_date, to_date,party_type=None):
 
         from frappe.desk.query_report import run
 
-        attendance_report = run("Payment Ledger", filters=filters,)
+        attendance_report = run("Payment Ledger", filters=filters,ignore_prepared_report=True)
         frappe.msgprint(str(len(attendance_report)))
         if attendance_report:
             for entry in attendance_report.get("result"):
