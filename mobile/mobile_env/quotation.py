@@ -6,7 +6,6 @@ from erpnext.accounts.utils import getdate
 from mobile.mobile_env.app_utils import (
     gen_response,
     ess_validate,
-    get_ess_settings,
     prepare_json_data,
     get_global_defaults,
     exception_handel,

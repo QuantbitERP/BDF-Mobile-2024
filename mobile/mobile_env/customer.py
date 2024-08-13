@@ -29,7 +29,6 @@ from mobile.mobile_env.app_utils import (
     ess_validate,
     get_employee_by_user,
     validate_employee_data,
-    get_ess_settings,
     get_global_defaults,
     exception_handel,
     get_actions,
