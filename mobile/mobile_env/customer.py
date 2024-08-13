@@ -80,7 +80,7 @@ def filter_customer_list():
     try:
         global_defaults = get_global_defaults()
         company = global_defaults.get("default_company")
-        list = frappe.get_all(
+        list = frappe.get_list(
             "Customer",
                 fields=[
                     "name"
@@ -187,7 +187,7 @@ def get_customer(name):
                 "comment_email",
             ],
         )
-        ordertodeliver = frappe.get_all(
+        ordertodeliver = frappe.get_list(
             "Sales Order",
             filters={
                 "customer": result.get("name"),

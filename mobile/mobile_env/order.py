@@ -2,7 +2,7 @@ import json
 import frappe
 from frappe import _
 from erpnext.utilities.product import get_price
-
+from erpnext.stock.get_item_details import get_item_price
 from erpnext.accounts.utils import getdate
 from mobile.mobile_env.app_utils import (
     gen_response,
@@ -75,9 +75,54 @@ def get_warehouselist():
     except Exception as e:
         exception_handel(e)
 
+@frappe.whitelist()
+def get_rates_for_uoms(item_code, price_list):
+    uom_rates = []
+    
+    # Fetch rates from Item Price doctype
+    item_rates = get_item_rates_from_price_list(item_code, price_list)
+    
+    for uom, rate in item_rates.items():
+        uom_rates.append({
+            "uom": uom,
+            "rate": rate
+        })
+
+    return uom_rates
+
+def get_item_rates_from_price_list(item_code, price_list, uom=None):
+    # Fetch item prices for the specific item and price list
+    item_price_conditions = {
+        "item_code": item_code,
+        "price_list": price_list
+    }
+    
+    if uom:
+        item_price_conditions["uom"] = uom
+    
+    # Fetch the item price records
+    item_prices = frappe.get_all(
+        "Item Price",
+        filters=item_price_conditions,
+        fields=["uom", "price_list_rate"]
+    )
+    
+    rates = {}
+    for price in item_prices:
+        rates[price.uom] = price.price_list_rate
+    
+    return rates
+
+
+
 
 @frappe.whitelist()
-def get_item_list(warehouse=None, price_list=None,customer=None):
+def get_item_list(warehouse=None, price_list=None, customer=None):
+    current_user = frappe.session.user
+
+    # Check if the current user is present in the 'custom_user' field of the specified customer
+    is_customer = frappe.db.exists('Customer', {'custom_user': current_user})
+
     # Set default warehouse and price list if not provided
     if not warehouse:
         warehouse = frappe.db.get_single_value("Stock Settings", "default_warehouse")
@@ -130,13 +175,24 @@ def get_item_list(warehouse=None, price_list=None,customer=None):
         )
 
         # Getting additional item data
-        items = get_items_data(item_list, warehouse, price_list,customer)
+        items = get_items_data(item_list, warehouse, price_list, customer)
+
+        # Adding is_customer flag to each item
+        for item in items:
+            item['is_customer'] = bool(is_customer)
+
+            # Fetching UOM list and conversion factors for each item
+            uom_data = frappe.get_all(
+                "UOM Conversion Detail",
+                filters={"parent": item["name"]},
+                fields=["uom", "conversion_factor"]
+            )
+            item['uoms'] = uom_data
         
         # Generating response
         gen_response(200, "Item list retrieved successfully", items)
     except Exception as e:
         exception_handel(e)
-
 
 
 
@@ -150,7 +206,8 @@ def get_items_data(items, warehouse, price_list,customer):
             "image": item.image,
             "uom": item.sales_uom if item.sales_uom else item.stock_uom,
             "actual_qty": float(get_actual_qty(item.item_code, warehouse)),
-            "rate": get_item_rate(item.item_code, price_list,customer),  # Fetch rate
+            "rate": get_item_rate(item.item_code, price_list,customer),
+            "price_list_rate" :get_item_price_list_rate(item.item_code, price_list,customer)
         }
         items_data.append(item_data)
     return items_data
@@ -172,27 +229,93 @@ def get_item_rate(item_code, price_list, customer):
     # Retrieve the customer group from the customer record
     customer_group = frappe.get_value("Customer", customer, "customer_group")
     
-    # Get global default values, such as the default company
     global_defaults = get_global_defaults()
     company = global_defaults.get("default_company")
-    
-    # Retrieve the item price based on various parameters
     item_price = get_price(item_code=item_code, price_list=price_list, customer_group=customer_group, company=company)
-    
-    # Print the item price for debugging purposes
-    frappe.msgprint(str(item_price))
-    
-    # Check if item_price is not None and contains the expected key
     if item_price and "formatted_price_sales_uom" in item_price:
-        # Remove the currency symbol and any spaces, then convert to float
         formatted_price = item_price["formatted_price_sales_uom"].replace('₹', '').replace(',', '').strip()
         return float(formatted_price)
     else:
         return 0.0
+    
+def get_item_price_list_rate(item_code, price_list, customer):
+    # Retrieve the customer group from the customer record
+    customer_group = frappe.get_value("Customer", customer, "customer_group")
+    
+    global_defaults = get_global_defaults()
+    company = global_defaults.get("default_company")
+    
+    # Get the item price using customer group and company
+    item_price = get_price(item_code=item_code, price_list=price_list, customer_group=customer_group, company=company)
+    
+    # Check if the price list rate is available
+    if item_price and "price_list_rate" in item_price:
+        return float(item_price["price_list_rate"])
+    else:
+        return 0.0   
 
 
+@frappe.whitelist()
+def item_price_on_uom(itemCode,price_list,customer,uom):
+    item_price_args = {
+		"item_code": itemCode,
+		"price_list": price_list,
+		"customer": customer,
+		"uom": uom,
+	}
+    
+    price=get_item_price(item_price_args,item_code=itemCode)
+    gen_response(200, "Generate Price", price)
+    return price
 
 # Continue with your code as needed
+@frappe.whitelist()
+def get_rate_for_uom(item_code, price_list, uom):
+
+    if not price_list:
+        price_list = frappe.db.get_single_value("Selling Settings", "selling_price_list")
+    # Fetch the rate for the specific item, price list, and UOM
+    item_price = frappe.get_value(
+        "Item Price", 
+        {"item_code": item_code, "price_list": price_list, "uom": uom},
+        "price_list_rate"
+    )
+    
+    if item_price:
+        return float(item_price)
+    else:
+        return 0.0  
+    
+@frappe.whitelist()
+def grtratesWithUOM(item_code, price_list):
+    uom_rates = []
+
+    # Fetch all UOMs and their conversion factors for the item
+    uom_conversion_factors = frappe.get_all(
+        "UOM Conversion Factor",
+        filters={"from_uom": item_code},
+        fields=["to_uom", "value"]
+    )
+
+    # Fetch base UOM rates
+    base_uom_rates = get_item_rates_from_price_list(item_code, price_list)
+
+    for uom_conversion in uom_conversion_factors:
+        uom = uom_conversion.to_uom
+        conversion_factor = uom_conversion.value
+
+        # Get the rate for the base UOM
+        base_rate = base_uom_rates.get(item_code, 0.0)
+        
+        # Calculate rate for the UOM
+        rate = base_rate * conversion_factor
+
+        uom_rates.append({
+            "uom": uom,
+            "rate": rate
+        })
+
+    return uom_rates
 
 
 @frappe.whitelist()
@@ -317,3 +440,9 @@ def getting_item_for_customer(code,pricelist,group):
     data = get_price(item_code=code,price_list=pricelist,customer_group=group,company=company)
 
     return data
+
+
+@frappe.whitelist()
+def get_units():
+    units_types = frappe.get_all('UOM', fields=['name'])
+    return units_types
