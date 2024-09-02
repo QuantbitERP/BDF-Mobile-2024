@@ -204,8 +204,16 @@ def get_emp_name():
         emp_data = frappe.get_doc("User",frappe.session.user)
         global_defaults = get_global_defaults()
         company = global_defaults.get("default_company")
+        customer=frappe.get_value("Customer",{"custom_user":frappe.session.user},"name")
+        is_customer = frappe.db.exists('Customer', {'custom_user': frappe.session.user})
+
+        customer_report=run_customer_report(customer)
         dashboard_data = {
-          
+            "customer":customer,
+            "is_customer_login":bool(is_customer),
+            "credit_limit":customer_report.get("credit_limit") if customer_report else None,
+            "outstanding_amt":customer_report.get("outstanding_amt") if customer_report else None,
+            "credit_balance":customer_report.get("credit_balance") if customer_report else None,
             "emp_name":emp_data.full_name,
             "email":emp_data.email,
             "company": company if company else None,
