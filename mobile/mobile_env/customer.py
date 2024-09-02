@@ -124,7 +124,8 @@ def get_customer(name):
         ]
         address_list = frappe.get_list("Address", filters=filters, fields=["*"], order_by="creation asc")
         address_list = [a.update({"display": get_address_display(a)}) for a in address_list]
-
+        
+        customer_report=run_customer_report(cust.name)
         address_list = sorted(
             address_list,
             key=functools.cmp_to_key(
@@ -148,6 +149,9 @@ def get_customer(name):
             "customer_type": cust.customer_type,
             "customer_group": cust.customer_group,
             "territory": cust.territory,
+            "credit_limit":customer_report.get("credit_limit") if customer_report else None,
+            "outstanding_amt":customer_report.get("outstanding_amt") if customer_report else None,
+            "credit_balance":customer_report.get("credit_balance") if customer_report else None,
             "gst_category": cust.gst_category,
             "gstin": cust.gstin,
             "email_id": contact_doc.email_id if contact_doc else None,
@@ -318,3 +322,19 @@ def make_shipping_address(args):
         return address
     except Exception as e:
         return exception_handel(e)
+
+
+@frappe.whitelist()
+def run_customer_report(customer):
+    global_defaults = get_global_defaults()
+    company = global_defaults.get("default_company")
+    filters = {
+        "customer":customer,
+        "company": company,
+        "summarized_view": 1,
+    }
+    from frappe.desk.query_report import run
+
+    customercreditlimit_report = run("Customer Credit limit Report", filters=filters)
+    if customercreditlimit_report.get("result"):
+        return customercreditlimit_report.get("result")[0]

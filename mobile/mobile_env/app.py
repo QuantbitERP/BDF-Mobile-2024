@@ -35,6 +35,10 @@ from mobile.mobile_env.app_utils import (
     get_global_defaults,
     exception_handel,
 )
+from mobile.mobile_env.customer import (
+    run_customer_report,
+    
+)
 
 from erpnext.accounts.utils import get_fiscal_year
 
@@ -155,14 +159,22 @@ def get_dashboard():
         a,b=get_leave_balance_dashboard()
         current_site=frappe.local.site
         permissionlist=user_has_permission()
+        customer=frappe.get_value("Customer",{"custom_user":frappe.session.user},"name")
+        is_customer = frappe.db.exists('Customer', {'custom_user': frappe.session.user})
+        if customer:
+            customer_report=run_customer_report(customer)
         dashboard_data = {
            "leave_balance": b,
             # "latest_leave": {},
             # "latest_expense": {},
             # "latest_salary_slip": {},
+            "is_customer_login":bool(is_customer),
             "permission_list":permissionlist,
             "last_log_type": log_details.get("log_type"),
            "attendance_details":attendance_details,
+           "credit_limit":customer_report.get("credit_limit"),
+            "outstanding_amt":customer_report.get("outstanding_amt"),
+            "credit_balance":customer_report.get("credit_balance"),
             "emp_name":emp_data.get("employee_name"),
             "email":frappe.session.user,
             "company": emp_data.get("company") or "Employee Dashboard",
@@ -973,3 +985,4 @@ def run_attendance_report(employee, company):
     attendance_report = run("Monthly Attendance Sheet", filters=filters)
     if attendance_report.get("result"):
         return attendance_report.get("result")[0]
+
