@@ -119,7 +119,7 @@ def get_item_list(warehouse=None, price_list=None, customer=None):
             item['uoms'] = uom_data
             item['rate']= item["price_list_rate"]
             item['conversion_rate']= get_item_price_list_rate(item["item_code"],price_list,customer)
-        
+            item['custom_restrict_the_uom_to_change']=frappe.get_value("Item",item["item_code"],"custom_restrict_the_uom_to_change")
         frappe.msgprint(f"Final Items: {items}")
         # Generating response
         gen_response(200, "Item list retrieved successfully", items)
@@ -171,7 +171,7 @@ def filter_item_data(item_data):
         "amount", "base_amount", "net_rate", "net_amount",
         "discount_percentage", "discount_amount", "bom_no",
         "weight_per_unit", "weight_uom", "grant_commission",
-        "conversion_factor", "item_group", "actual_qty"
+        "conversion_factor", "item_group", "actual_qty","custom_restrict_the_uom_to_change"
     ]
     
     # Filter the dictionary to only include these keys

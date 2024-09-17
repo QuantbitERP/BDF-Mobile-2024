@@ -129,7 +129,7 @@ def get_item_list(warehouse=None, price_list=None, customer=None):
         
     if not price_list:
         price_list = frappe.db.get_single_value("Selling Settings", "selling_price_list")
-        
+
     try:
         # Fetching the party specific items
         party_item_list = frappe.get_all(
@@ -187,6 +187,7 @@ def get_item_list(warehouse=None, price_list=None, customer=None):
             item['uoms'] = uom_data
             item['rate']= item["price_list_rate"]
             item['conversion_rate']= get_item_price_list_rate(item["item_code"],price_list,customer)
+            item['custom_restrict_the_uom_to_change']=frappe.get_value("Item",item["item_code"],"custom_restrict_the_uom_to_change")
         frappe.msgprint(f"Final Items: {items}")
         # Generating response
         gen_response(200, "Item list retrieved successfully", items)
