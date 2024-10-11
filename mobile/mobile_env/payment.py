@@ -1,6 +1,6 @@
 import frappe
 from frappe import _
-from frappe.utils import today, flt
+from frappe.utils import today, flt, pretty_date
 from mobile.mobile_env.app_utils import (
     gen_response,
     ess_validate,
@@ -280,7 +280,7 @@ def get_payment_entry_list(start=0, page_length=10, filters=None):
         status_field = check_workflow_exists("Payment Entry")
         if not status_field:
             status_field = "status"
-        
+        frappe.msgprint(str(filters))
         payment_entry_list = frappe.get_list(
             "Payment Entry",
             fields=[
@@ -359,7 +359,30 @@ def get_payment_entry(id):
                     reference,
                 )
             )
-     
+        comments = frappe.get_all(
+            "Comment",
+            filters={
+                "reference_name": ["like", "%{0}%".format(payment_entry_doc.get("name"))],
+                "comment_type": "Comment",
+            },
+            fields=[
+                "content as comment",
+                "comment_by",
+                "reference_name",
+                "creation",
+                "comment_email",
+            ],
+        )
+
+        for comment in comments:
+            comment["commented"] = pretty_date(comment["creation"])
+            comment["creation"] = comment["creation"].strftime("%I:%M %p")
+            comment["user_image"] = frappe.get_value(
+                "User", comment.comment_email, "user_image", cache=True
+            ) 
+
+        payment_entry_doc["comments"] = comments
+        payment_entry_doc["num_comments"] = len(comments)
         payment_entry_doc["next_action"] = get_actions(payment_entry, payment_entry_doc)
         payment_entry_doc["allow_edit"] = (
             True if payment_entry.get("docstatus") == 0 else False

@@ -29,9 +29,10 @@ from mobile.mobile_env.app_utils import (
     ess_validate,
     get_employee_by_user,
     validate_employee_data,
-    get_ess_settings,
     get_global_defaults,
     exception_handel,
+    get_actions,
+    check_workflow_exists,
 )
 
 
@@ -78,7 +79,7 @@ def filter_customer_list():
     try:
         global_defaults = get_global_defaults()
         company = global_defaults.get("default_company")
-        list = frappe.get_all(
+        list = frappe.get_list(
             "Customer",
                 fields=[
                     "name"
@@ -123,7 +124,8 @@ def get_customer(name):
         ]
         address_list = frappe.get_list("Address", filters=filters, fields=["*"], order_by="creation asc")
         address_list = [a.update({"display": get_address_display(a)}) for a in address_list]
-
+        
+        customer_report=run_customer_report(cust.name)
         address_list = sorted(
             address_list,
             key=functools.cmp_to_key(
@@ -139,10 +141,17 @@ def get_customer(name):
                  shipping_add=a                                  
         result = {
             "name": cust.name,
+            "docstatus":cust.docstatus,
+            "disabled":cust.disabled,
+            "workflow_state":cust.workflow_state,
+            "doctype":cust.doctype,
             "customer_name": cust.customer_name,
             "customer_type": cust.customer_type,
             "customer_group": cust.customer_group,
             "territory": cust.territory,
+            "credit_limit":customer_report.get("credit_limit") if customer_report else None,
+            "outstanding_amt":customer_report.get("outstanding_amt") if customer_report else None,
+            "credit_balance":customer_report.get("credit_balance") if customer_report else None,
             "gst_category": cust.gst_category,
             "gstin": cust.gstin,
             "email_id": contact_doc.email_id if contact_doc else None,
@@ -167,6 +176,52 @@ def get_customer(name):
                 "country": shipping_add.country if shipping_add else None
             } if shipping_add else None
         }
+        comments = frappe.get_all(
+            "Comment",
+            filters={
+                "reference_name": ["like", "%{0}%".format(result.get("name"))],
+                "comment_type": "Comment",
+            },
+            fields=[
+                "content as comment",
+                "comment_by",
+                "reference_name",
+                "creation",
+                "comment_email",
+            ],
+        )
+        ordertodeliver = frappe.get_list(
+            "Sales Order",
+            filters={
+                "customer": result.get("name"),
+                "status":["in", ["To Deliver and Bill","To Deliver"]],
+            },
+            fields=[
+                "name",
+            ],order_by="creation desc"
+        )
+        orders = frappe.get_list(
+            "Sales Order",
+            filters={
+                "customer": result.get("name"),
+            },
+            fields=[
+                "name","delivery_date","rounded_total"
+            ],order_by="creation desc"
+        )
+        for comment in comments:
+            comment["commented"] = pretty_date(comment["creation"])
+            comment["creation"] = comment["creation"].strftime("%I:%M %p")
+            comment["user_image"] = frappe.get_value(
+                "User", comment.comment_email, "user_image", cache=True
+            ) 
+        result["orders"]=orders
+        result["comments"] = comments
+        result["order_deliver"]=len(ordertodeliver)
+        result["next_action"] = get_actions(result, result)
+        result["allow_edit"] = (
+            True if result.get("docstatus") == 0 else False
+        )
         gen_response(200, "Customer data get successfully.", result)
     except Exception as e:
         return exception_handel(e)
@@ -267,3 +322,19 @@ def make_shipping_address(args):
         return address
     except Exception as e:
         return exception_handel(e)
+
+
+@frappe.whitelist()
+def run_customer_report(customer):
+    global_defaults = get_global_defaults()
+    company = global_defaults.get("default_company")
+    filters = {
+        "customer":customer,
+        "company": company,
+        "summarized_view": 1,
+    }
+    from frappe.desk.query_report import run
+
+    customercreditlimit_report = run("Customer Credit limit Report", filters=filters)
+    if customercreditlimit_report.get("result"):
+        return customercreditlimit_report.get("result")[0]

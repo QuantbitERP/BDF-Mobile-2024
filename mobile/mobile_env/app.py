@@ -32,9 +32,12 @@ from mobile.mobile_env.app_utils import (
     ess_validate,
     get_employee_by_user,
     validate_employee_data,
-    get_ess_settings,
     get_global_defaults,
     exception_handel,
+)
+from mobile.mobile_env.customer import (
+    run_customer_report,
+    
 )
 
 from erpnext.accounts.utils import get_fiscal_year
@@ -46,13 +49,10 @@ def login(usr, pwd):
     try:
         login_manager = LoginManager()
         login_manager.authenticate(usr, pwd)
-        # validate_employee(login_manager.user)
         login_manager.post_login()
         if frappe.response["message"] == "Logged In":
-            emp_data = get_employee_by_user(login_manager.user)
             frappe.response["user"] = login_manager.user
             frappe.response["key_details"] = generate_key(login_manager.user)
-            # frappe.response["employee_id"] = emp_data.get("name")
         gen_response(200, frappe.response["message"])
     except frappe.AuthenticationError:
         gen_response(500, frappe.response["message"])
@@ -74,7 +74,7 @@ def get_user_document():
 @frappe.whitelist()
 def user_has_permission():
     permission_list=[]
-    doclist=["sales Invoice","Sales Order","Lead","Quotation","Leave Application","Expense Claim","Attendance","Customer","Payment Entry","Report"]
+    doclist=["sales Invoice","Sales Order","Customer","Payment Entry","Report"]
     for i in doclist:
         permission=has_permission(i)
         if permission:
@@ -159,14 +159,22 @@ def get_dashboard():
         a,b=get_leave_balance_dashboard()
         current_site=frappe.local.site
         permissionlist=user_has_permission()
+        customer=frappe.get_value("Customer",{"custom_user":frappe.session.user},"name")
+        is_customer = frappe.db.exists('Customer', {'custom_user': frappe.session.user})
+        if customer:
+            customer_report=run_customer_report(customer)
         dashboard_data = {
            "leave_balance": b,
             # "latest_leave": {},
             # "latest_expense": {},
             # "latest_salary_slip": {},
+            "is_customer_login":bool(is_customer),
             "permission_list":permissionlist,
             "last_log_type": log_details.get("log_type"),
            "attendance_details":attendance_details,
+           "credit_limit":customer_report.get("credit_limit"),
+            "outstanding_amt":customer_report.get("outstanding_amt"),
+            "credit_balance":customer_report.get("credit_balance"),
             "emp_name":emp_data.get("employee_name"),
             "email":frappe.session.user,
             "company": emp_data.get("company") or "Employee Dashboard",
@@ -196,8 +204,16 @@ def get_emp_name():
         emp_data = frappe.get_doc("User",frappe.session.user)
         global_defaults = get_global_defaults()
         company = global_defaults.get("default_company")
+        customer=frappe.get_value("Customer",{"custom_user":frappe.session.user},"name")
+        is_customer = frappe.db.exists('Customer', {'custom_user': frappe.session.user})
+
+        customer_report=run_customer_report(customer)
         dashboard_data = {
-          
+            "customer":customer,
+            "is_customer_login":bool(is_customer),
+            "credit_limit":customer_report.get("credit_limit") if customer_report else None,
+            "outstanding_amt":customer_report.get("outstanding_amt") if customer_report else None,
+            "credit_balance":customer_report.get("credit_balance") if customer_report else None,
             "emp_name":emp_data.full_name,
             "email":emp_data.email,
             "company": company if company else None,
@@ -247,39 +263,30 @@ def change_password(**kwargs):
 @frappe.whitelist()
 def get_profile():
     try:
-        emp_data = get_employee_by_user(frappe.session.user)
-        if isinstance(emp_data, str):
-            return gen_response(400,emp_data)
+        
         employee_details = frappe.get_cached_value(
-            "Employee",
-            emp_data.get("name"),
+            "User",
+           frappe.session.user,
             [
-                "employee_name",
-                "designation",
+                "username",
+                "full_name",
+                "email",
                 "name",
-                "date_of_joining",
-                "date_of_birth",
+            "time_zone",
+                "birth_date",
                 "gender",
-                "company_email",
-                "personal_email",
-                "cell_number",
-                "emergency_phone_number",
+                "mobile_no"
             ],
             as_dict=True,
         )
-        employee_details["date_of_joining"] = employee_details[
-            "date_of_joining"
-        ].strftime("%d-%m-%Y")
-        employee_details["date_of_birth"] = employee_details["date_of_birth"].strftime(
-            "%d-%m-%Y"
-        )
+        
         image=frappe.get_cached_value(
-            "Employee", emp_data.get("name"), "image"
+            "User",frappe.session.user, "user_image",
         )
         if image is not None:
-            employee_details["employee_image"] = frappe.utils.get_url()+ image
+            employee_details["user_image"] = frappe.utils.get_url()+ image
         else:
-            employee_details["employee_image"] = None
+            employee_details["user_image"] = None
         
 
         return gen_response(200, "My Profile", employee_details)
@@ -308,20 +315,11 @@ def add_note_in_lead(doc_name, note):
 @frappe.whitelist()
 def update_profile_picture():
     try:
-        emp_data = get_employee_by_user(frappe.session.user)
-        if isinstance(emp_data, str):
-            return gen_response(400,emp_data)
+       
         from frappe.handler import upload_file
 
         employee_profile_picture = upload_file()
-        employee_profile_picture.attached_to_doctype = "Employee"
-        employee_profile_picture.attached_to_name = emp_data.get("name")
-        employee_profile_picture.attached_to_field = "image"
-        employee_profile_picture.save(ignore_permissions=True)
-
-        frappe.db.set_value(
-            "Employee", emp_data.get("name"), "image", employee_profile_picture.file_url
-        )
+       
         if employee_profile_picture:
             frappe.db.set_value(
                 "User",
@@ -329,7 +327,7 @@ def update_profile_picture():
                 "user_image",
                 employee_profile_picture.file_url,
             )
-        return gen_response(200, "Employee profile picture updated successfully")
+        return gen_response(200, "Profile picture updated successfully")
     except Exception as e:
         return exception_handel(e)
 
@@ -995,3 +993,4 @@ def run_attendance_report(employee, company):
     attendance_report = run("Monthly Attendance Sheet", filters=filters)
     if attendance_report.get("result"):
         return attendance_report.get("result")[0]
+

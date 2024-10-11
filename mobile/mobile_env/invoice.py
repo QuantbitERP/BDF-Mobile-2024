@@ -1,16 +1,16 @@
 import json
 import frappe
 from frappe import _
-
+from erpnext.utilities.product import get_price
 from erpnext.accounts.utils import getdate
+from erpnext.stock.get_item_details import get_item_price,get_item_details
 from mobile.mobile_env.app_utils import (
     gen_response,
-    ess_validate,
-    get_ess_settings,
     prepare_json_data,
     get_global_defaults,
     exception_handel,
 )
+
 from erpnext.accounts.party import (get_dashboard_info,get_party_account)
 from erpnext.controllers.queries import get_income_account
 
@@ -21,53 +21,188 @@ def get_customer_list():
     try:
         customer_list = frappe.get_list(
             "Customer",
-            fields=["name", "customer_name"],
+            fields=["name", "customer_name", "workflow_state", "default_price_list"],
+            filters={"workflow_state": "Approved"}
         )
-        gen_response(200, "Customer list get successfully", customer_list)
+        for customer in customer_list:
+            routes = frappe.get_value(
+                "Dynamic Link",
+                {
+                    "link_doctype": "Route Master",
+                    "parenttype": "Customer",
+                    "parent": customer.name,
+                },
+                'link_name'
+            )
+            customer["routes"] = routes
+            route_warehouse=frappe.get_value(
+                "Route Master",
+                routes,
+                'source_warehouse'
+            )
+            customer["route_warehouse"]=route_warehouse
+
+
+        gen_response(200, "Customer list fetched successfully", customer_list)
     except Exception as e:
         return exception_handel(e)
 
 
-"""get item list for mobile app to make order"""
-
 @frappe.whitelist()
-def get_item_list(warehouse):
+def get_item_list(warehouse=None, price_list=None, customer=None):
+    current_user = frappe.session.user
+
+    # Check if the current user is present in the 'custom_user' field of the specified customer
+    is_customer = frappe.db.exists('Customer', {'custom_user': current_user})
+
+    # Set default warehouse and price list if not provided
     if not warehouse:
-        warehouse=frappe.db.get_single_value("Stock Settings","default_warehouse")
-        frappe.msgprint(warehouse)
-    else:
-        warehouse
+        warehouse = frappe.db.get_single_value("Stock Settings", "default_warehouse")
+        
+    if not price_list:
+        price_list = frappe.db.get_single_value("Selling Settings", "selling_price_list")
+        
     try:
+        # Fetching the party specific items
+        party_item_list = frappe.get_all(
+            "Party Specific Item",
+            filters={
+                "party_type": "Customer",
+                "party": customer,
+                "restrict_based_on": "Item"
+            },
+            pluck="based_on_value"
+        )
+        
+        frappe.msgprint(f"Party Item List: {party_item_list}")
+
+        # If no party-specific items are found, get all items
+        if not party_item_list:
+            frappe.msgprint("No party-specific items found, retrieving all items.")
+            item_filters = {
+                "is_sales_item": 1,
+                "has_variants": 0,
+                "disabled": 0
+            }
+        else:
+            item_filters = {
+                "is_sales_item": 1,
+                "has_variants": 0,
+                "disabled": 0,
+                "name": ["in", party_item_list]
+            }
+
+        # Fetching item details
         item_list = frappe.get_list(
             "Item",
-            fields=["name", "item_name", "item_code", "image"],
+            fields=[
+               "*"
+            ],
+            filters=item_filters
         )
-        items = get_items_data(item_list,warehouse)
-        gen_response(200, "Item list get successfully", items)
+
+        items=[]
+        
+        # Getting additional item data
+        items = get_items_data(item_list, warehouse, price_list, customer)
+        
+        # Adding is_customer flag to each item
+        for item in items:
+            item['is_customer'] = bool(is_customer)
+
+            # Fetching UOM list and conversion factors for each item
+            uom_data = frappe.get_all(
+                "UOM Conversion Detail",
+                filters={"parent": item["item_code"]},
+                fields=["uom", "conversion_factor"]
+            )
+            item['uoms'] = uom_data
+            item['rate']= item["price_list_rate"]
+            item['conversion_rate']= get_item_price_list_rate(item["item_code"],price_list,customer)
+            item['custom_restrict_the_uom_to_change']=frappe.get_value("Item",item["item_code"],"custom_restrict_the_uom_to_change")
+        frappe.msgprint(f"Final Items: {items}")
+        # Generating response
+        gen_response(200, "Item list retrieved successfully", items)
     except Exception as e:
+        frappe.log_error(message=str(e), title="Error in get_item_list")
         exception_handel(e)
 
 
-def get_items_data(items,warehouse):
+@frappe.whitelist()
+def get_items_data(items, warehouse, price_list, customer):
     items_data = []
+    company = get_global_defaults().get("default_company")
+    
+    if not items:
+        frappe.throw("No items found to process.")
+
     for item in items:
-        item_data = {
-            "name": item.name,
-            "item_name": item.item_name,
-            "item_code": item.item_code,
-            "image": item.image,
-            "actual_qty": float(get_actual_qty(item.item_code,warehouse)),
-            "rate": get_item_rate(item.item_code)  # Fetch rate
+        # if not all(field in item for field in ["item_code", "name"]):
+        #     frappe.throw(f"Missing required fields in item: {item}")
+
+        args = {
+            "item_code": item.get("item_code"),
+            "set_warehouse": warehouse,
+            "warehouse": warehouse,
+            "customer": customer,
+            "selling_price_list": price_list,
+            "doctype": "Sales Order",
+            "company": company,
+            "currency": "INR",
         }
-        items_data.append(item_data)
+        
+        item_data = get_item_details(args)
+        
+        # Filter item_data to include only the desired keys
+        filtered_item_data = filter_item_data(item_data)
+        
+        items_data.append(filtered_item_data)
+
     return items_data
+
+
+
+def filter_item_data(item_data):
+    # Define the keys you want to keep
+    keys_to_keep = [
+        "item_code", "item_name", "description", "image",
+        "uom", "stock_uom", "qty", "stock_qty",
+        "price_list_rate", "base_price_list_rate", "rate", "base_rate",
+        "amount", "base_amount", "net_rate", "net_amount",
+        "discount_percentage", "discount_amount", "bom_no",
+        "weight_per_unit", "weight_uom", "grant_commission",
+        "conversion_factor", "item_group", "actual_qty","custom_restrict_the_uom_to_change"
+    ]
+    
+    # Filter the dictionary to only include these keys
+    filtered_item_data = {key: item_data.get(key) for key in keys_to_keep}
+    
+    return filtered_item_data
+
+
+@frappe.whitelist()
+def get_item_price_list_rate(item_code, price_list, customer):
+    # Retrieve the customer group from the customer record
+    customer_group = frappe.get_value("Customer", customer, "customer_group")
+    
+    global_defaults = get_global_defaults()
+    company = global_defaults.get("default_company")
+    
+    # Get the item price using customer group and company
+    item_price = get_price(item_code=item_code, price_list=price_list, customer_group=customer_group, company=company)
+    
+    # Check if the price list rate is available
+    if item_price and "price_list_rate" in item_price:
+        return float(item_price["price_list_rate"])
+    else:
+        return 0.0   
 
 
 def get_actual_qty(item_code,warehouse):
     bin_data = frappe.get_all(
         "Bin",
         filters={"item_code": item_code,"warehouse":warehouse},
-        fields=["actual_qty"]
+        fields=["actual_qty", "warehouse"]
     )
     if bin_data:
         return bin_data[0].get("actual_qty", 0)
@@ -75,18 +210,17 @@ def get_actual_qty(item_code,warehouse):
         return 0
 
 
-def get_item_rate(item_code):
-    item_price = frappe.get_all(
-        "Item Price",
-        filters={"item_code": item_code},
-        fields=["price_list_rate"],
-        order_by="creation desc",  # Add this to get the latest price
-        limit=1  # Add this to get only the latest price
-    )
-    if item_price:
-        return item_price[0].get("price_list_rate", 0)
+def get_item_rate(item_code, price_list, customer):
+    customer_group = frappe.get_value("Customer", customer, "customer_group")
+    global_defaults=frappe.get_doc("Global Defaults", "Global Defaults")
+    company = global_defaults.get("default_company")
+    item_price = get_price(item_code=item_code, price_list=price_list, customer_group=customer_group, company=company)
+    if item_price and "formatted_price_sales_uom" in item_price:
+        formatted_price = item_price["formatted_price_sales_uom"].replace('₹', '').replace(',', '').strip()
+        return float(formatted_price)
     else:
         return 0.0
+
 
 # Continue with your code as needed
     
@@ -96,9 +230,7 @@ def prepare_order_totals(**kwargs):
         data = kwargs
         if not data.get("customer"):
             return gen_response(500, "Customer is required.")
-      
-        # ess_settings = get_ess_settings()
-        # default_warehouse = ess_settings.get("default_warehouse")
+
         source_warehouse=data.get('set_warehouse')
         if source_warehouse:
             for item in data.get("items"):

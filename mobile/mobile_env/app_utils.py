@@ -59,7 +59,6 @@ def get_employee_by_user(user, fields=["name"]):
     )
     if not emp_data:
         return "Your employee profile has not been created. Please contact the HR manager to set up your profile."
-        
     return emp_data
 
 
@@ -69,7 +68,7 @@ def role_profile(user):
             return role
     except Exception as e:
         frappe.log_error(f"Error in role_profile function: {e}")
-        return None  # Return None or a default value to indicate the
+        return None 
 
 
 def validate_employee_data(employee_data):
@@ -78,16 +77,11 @@ def validate_employee_data(employee_data):
             500,
             "Company not set in employee doctype. Contact HR manager for set company",
         )
-
-
-def get_ess_settings():
-    return frappe.get_doc(
-        "Employee Self Service Settings", "Employee Self Service Settings"
-    )
+    
 
 
 def get_global_defaults():
-    return frappe.get_doc("Global Defaults", "Global Defaults")
+      return frappe.get_doc("Global Defaults", "Global Defaults")
 
 
 def remove_default_fields(data):
