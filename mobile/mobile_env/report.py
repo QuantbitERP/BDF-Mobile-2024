@@ -80,7 +80,7 @@ def run_payment_ledger_report(from_date, to_date,party_type=None):
         is_customer = frappe.db.exists('Customer', {'custom_user': frappe.session.user})
         if is_customer:
             customer_id=frappe.db.get_value("Customer",{"custom_user":frappe.session.user},"name")
-            frappe.msgprint(customer_id)
+            # frappe.msgprint(customer_id)
         global_defaults = get_global_defaults()
         company = global_defaults.get("default_company")
         filters = {
@@ -93,6 +93,18 @@ def run_payment_ledger_report(from_date, to_date,party_type=None):
             "include_default_book_entries":1,
             "group_by":"Group by Voucher (Consolidated)",
         }
+        if is_customer:
+            filters = {
+            "from_date": from_date,
+            "to_date": to_date,
+            "company": company,
+            "party_type": "Customer" if is_customer else None,
+            "party":[(customer_id if is_customer else None)],
+            "include_dimensions":1,
+            "include_default_book_entries":1,
+            "group_by":"Group by Voucher (Consolidated)",
+                     }
+        
         
         from frappe.desk.query_report import run
 
